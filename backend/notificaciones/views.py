@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -61,3 +62,11 @@ class NotificacionViewSet(viewsets.ReadOnlyModelViewSet):
     def marcar_todas_leidas(self, request):
         actualizadas = self.get_queryset().filter(leida=False).update(leida=True)
         return Response({'marcadas': actualizadas})
+
+    @action(detail=False, methods=['get'], url_path='sms-estado')
+    def sms_estado(self, request):
+        return Response({
+            'sms_habilitado': getattr(settings, 'MYSMSGATE_ENABLED', False),
+            'telefono': (request.user.telefono or '').strip(),
+            'telefono_configurado': bool((request.user.telefono or '').strip()),
+        })

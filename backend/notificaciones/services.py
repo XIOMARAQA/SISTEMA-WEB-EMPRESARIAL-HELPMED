@@ -77,7 +77,7 @@ def crear_notificacion(
     referencia_modulo='',
     referencia_id=None,
 ):
-    return Notificacion.objects.create(
+    notif = Notificacion.objects.create(
         usuario=usuario,
         titulo=titulo,
         mensaje=mensaje,
@@ -86,6 +86,13 @@ def crear_notificacion(
         referencia_modulo=referencia_modulo,
         referencia_id=referencia_id,
     )
+    try:
+        from notificaciones.mysmsgate import enviar_sms_mysmsgate
+        enviar_sms_mysmsgate(notif)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('SMS MySMSGate no enviado para notificación %s', notif.pk)
+    return notif
 
 
 def notificar_por_roles(

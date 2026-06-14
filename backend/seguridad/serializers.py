@@ -65,6 +65,15 @@ class UsuarioGestionSerializer(UsuarioSerializer):
         return RolSerializer(ur.rol).data
 
 
+class PerfilUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Usuario
+        fields = ('telefono',)
+
+    def validate_telefono(self, value):
+        return (value or '').strip()[:20]
+
+
 class UsuarioCreateSerializer(serializers.ModelSerializer):
     rol = serializers.PrimaryKeyRelatedField(queryset=Rol.objects.filter(activo=True))
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=128)

@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue()],
     server: {
+      host: true,
       port: Number(env.VITE_DEV_SERVER_PORT) || 5173,
       proxy: {
         '/api': {

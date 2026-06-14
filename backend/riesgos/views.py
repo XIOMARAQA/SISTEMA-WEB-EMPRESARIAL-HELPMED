@@ -3,6 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from reportes.builders import exportar_gestion_riesgos_excel
+
 from riesgos.models import (
     Activo,
     Amenaza,
@@ -12,6 +14,21 @@ from riesgos.models import (
     TratamientoRiesgo,
     Vulnerabilidad,
 )
+
+
+class RiesgosViewSetMixin:
+    """Catálogos ISO 27005: listas completas sin paginar (volúmenes pequeños)."""
+    pagination_class = None
+
+
+class BajaLogicaMixin:
+    """DELETE vía API también aplica baja lógica (no borrado físico)."""
+    baja_logica_campos: tuple[str, object] = ('activo', False)
+
+    def perform_destroy(self, instance):
+        campo, valor = self.baja_logica_campos
+        setattr(instance, campo, valor)
+        instance.save(update_fields=[campo])
 
 
 class ActivoSerializer(serializers.ModelSerializer):
@@ -98,11 +115,63 @@ class EvaluacionRiesgoSerializer(serializers.ModelSerializer):
         validated_data['evaluado_por'] = self.context['request'].user
         return super().create(validated_data)
 
+    def update(self, instance, validated_data):
+        prob = validated_data.get('probabilidad', instance.probabilidad)
+        imp = validated_data.get('impacto', instance.impacto)
+        if 'probabilidad' in validated_data or 'impacto' in validated_data:
+            valor = prob * imp
+            validated_data['valor_riesgo'] = valor
+            validated_data['nivel'] = EvaluacionRiesgo.calcular_nivel(valor)
+        return super().update(instance, validated_data)
+
 
 class TratamientoRiesgoSerializer(serializers.ModelSerializer):
+    riesgo_codigo = serializers.CharField(source='riesgo.codigo', read_only=True)
+    riesgo_residual_valor = serializers.SerializerMethodField()
+    riesgo_residual_nivel = serializers.SerializerMethodField()
+
     class Meta:
         model = TratamientoRiesgo
         fields = '__all__'
+        read_only_fields = ('riesgo_residual', 'evaluacion_residual')
+
+    def _evaluacion_residual(self, obj):
+        if obj.evaluacion_residual_id:
+            return obj.evaluacion_residual
+        return (
+            EvaluacionRiesgo.objects
+            .filter(
+                riesgo_id=obj.riesgo_id,
+                tipo=EvaluacionRiesgo.Tipo.RESIDUAL,
+                activo=True,
+            )
+            .order_by('-fecha_evaluacion', '-creado_en')
+            .first()
+        )
+
+    def get_riesgo_residual_valor(self, obj):
+        if obj.riesgo_residual is not None:
+            return obj.riesgo_residual
+        ev = self._evaluacion_residual(obj)
+        return ev.valor_riesgo if ev else None
+
+    def get_riesgo_residual_nivel(self, obj):
+        ev = self._evaluacion_residual(obj)
+        return ev.nivel if ev else None
+
+    def create(self, validated_data):
+        if 'responsable' not in validated_data:
+            validated_data['responsable'] = self.context['request'].user
+        ev = (
+            EvaluacionRiesgo.objects
+            .filter(riesgo=validated_data['riesgo'], tipo=EvaluacionRiesgo.Tipo.RESIDUAL, activo=True)
+            .order_by('-fecha_evaluacion', '-creado_en')
+            .first()
+        )
+        if ev:
+            validated_data['evaluacion_residual'] = ev
+            validated_data['riesgo_residual'] = ev.valor_riesgo
+        return super().create(validated_data)
 
 
 class ControlISO27001Serializer(serializers.ModelSerializer):
@@ -111,8 +180,8 @@ class ControlISO27001Serializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class ActivoViewSet(viewsets.ModelViewSet):
-    queryset = Activo.objects.filter(activo=True).select_related('propietario')
+class ActivoViewSet(BajaLogicaMixin, RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = Activo.objects.filter(activo=True).select_related('propietario').order_by('codigo')
     serializer_class = ActivoSerializer
     permission_classes = [IsAuthenticated]
 
@@ -129,8 +198,8 @@ class ActivoViewSet(viewsets.ModelViewSet):
         })
 
 
-class AmenazaViewSet(viewsets.ModelViewSet):
-    queryset = Amenaza.objects.filter(activo=True)
+class AmenazaViewSet(BajaLogicaMixin, RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = Amenaza.objects.filter(activo=True).order_by('codigo')
     serializer_class = AmenazaSerializer
     permission_classes = [IsAuthenticated]
 
@@ -143,8 +212,13 @@ class AmenazaViewSet(viewsets.ModelViewSet):
         })
 
 
-class VulnerabilidadViewSet(viewsets.ModelViewSet):
-    queryset = Vulnerabilidad.objects.select_related('activo')
+class VulnerabilidadViewSet(RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = (
+        Vulnerabilidad.objects
+        .select_related('activo')
+        .exclude(estado=Vulnerabilidad.Estado.CERRADA)
+        .order_by('codigo')
+    )
     serializer_class = VulnerabilidadSerializer
     permission_classes = [IsAuthenticated]
 
@@ -156,11 +230,24 @@ class VulnerabilidadViewSet(viewsets.ModelViewSet):
             'codigo': codigo,
         })
 
+    def perform_destroy(self, instance):
+        instance.estado = Vulnerabilidad.Estado.CERRADA
+        instance.save(update_fields=['estado'])
 
-class RiesgoViewSet(viewsets.ModelViewSet):
-    queryset = Riesgo.objects.select_related('activo', 'amenaza', 'vulnerabilidad')
+
+class RiesgoViewSet(RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = (
+        Riesgo.objects
+        .filter(eliminado=False)
+        .select_related('activo', 'amenaza', 'vulnerabilidad')
+        .order_by('codigo')
+    )
     serializer_class = RiesgoSerializer
     permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='exportar-excel')
+    def exportar_excel(self, request):
+        return exportar_gestion_riesgos_excel()
 
     @action(detail=False, methods=['get'], url_path='siguiente-codigo')
     def siguiente_codigo(self, request):
@@ -170,15 +257,29 @@ class RiesgoViewSet(viewsets.ModelViewSet):
             'codigo': codigo,
         })
 
+    def perform_destroy(self, instance):
+        instance.eliminado = True
+        instance.save(update_fields=['eliminado'])
 
-class EvaluacionRiesgoViewSet(viewsets.ModelViewSet):
-    queryset = EvaluacionRiesgo.objects.select_related('riesgo', 'evaluado_por')
+
+class EvaluacionRiesgoViewSet(BajaLogicaMixin, RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = (
+        EvaluacionRiesgo.objects
+        .filter(activo=True)
+        .select_related('riesgo', 'evaluado_por')
+        .order_by('-fecha_evaluacion', 'riesgo__codigo')
+    )
     serializer_class = EvaluacionRiesgoSerializer
     permission_classes = [IsAuthenticated]
 
 
-class TratamientoRiesgoViewSet(viewsets.ModelViewSet):
-    queryset = TratamientoRiesgo.objects.select_related('riesgo', 'responsable')
+class TratamientoRiesgoViewSet(BajaLogicaMixin, RiesgosViewSetMixin, viewsets.ModelViewSet):
+    queryset = (
+        TratamientoRiesgo.objects
+        .filter(activo=True)
+        .select_related('riesgo', 'responsable', 'evaluacion_residual')
+        .order_by('-fecha_inicio', 'riesgo__codigo')
+    )
     serializer_class = TratamientoRiesgoSerializer
     permission_classes = [IsAuthenticated]
 

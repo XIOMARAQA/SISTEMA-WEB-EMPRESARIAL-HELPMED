@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import { MAESTROS_MENU, maestrosVisibles } from '../config/maestros'
 import { etiquetaRoles, esSuperAdmin, puedeVerRuta, tieneModulo } from '../config/roles'
 import NotificationBell from '../components/NotificationBell.vue'
+import SmsStatus from '../components/SmsStatus.vue'
 
 
 
@@ -118,11 +119,9 @@ function toggleMaestros() {
 
 
 function logout() {
-
-  auth.logout()
-
-  router.push({ name: 'login' })
-
+  auth.logout().then(() => {
+    router.push({ name: 'login' })
+  })
 }
 
 onMounted(() => {
@@ -273,7 +272,10 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <NotificationBell />
+        <div class="d-flex align-items-center gap-3 flex-wrap justify-content-end">
+          <SmsStatus />
+          <NotificationBell />
+        </div>
       </header>
       <div class="flex-grow-1 p-4 pt-2">
         <RouterView />

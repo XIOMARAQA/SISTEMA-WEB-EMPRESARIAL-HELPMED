@@ -25,7 +25,14 @@ from reportes.formats import (
     valor_a_nivel,
 )
 from reportlab.platypus import Spacer
-from riesgos.models import EvaluacionRiesgo, Riesgo
+from riesgos.models import (
+    Activo,
+    Amenaza,
+    EvaluacionRiesgo,
+    Riesgo,
+    TratamientoRiesgo,
+    Vulnerabilidad,
+)
 
 
 def _grid_evaluaciones(evaluaciones):
@@ -38,10 +45,191 @@ def _grid_evaluaciones(evaluaciones):
 def _evaluaciones_inherentes():
     return list(
         EvaluacionRiesgo.objects
-        .filter(tipo='inherente')
+        .filter(tipo='inherente', activo=True, riesgo__eliminado=False)
         .select_related('riesgo', 'riesgo__activo', 'riesgo__amenaza')
         .order_by('-valor_riesgo', 'riesgo__codigo')
     )
+
+
+def _residual_tratamiento(tratamiento):
+    """Mismo criterio que la API/UI: campo guardado o evaluación residual vigente."""
+    if tratamiento.riesgo_residual is not None:
+        nivel = (
+            tratamiento.evaluacion_residual.nivel
+            if tratamiento.evaluacion_residual_id
+            else valor_a_nivel(tratamiento.riesgo_residual)
+        )
+        return tratamiento.riesgo_residual, nivel
+    ev = tratamiento.evaluacion_residual if tratamiento.evaluacion_residual_id else None
+    if ev is None:
+        ev = (
+            EvaluacionRiesgo.objects
+            .filter(
+                riesgo_id=tratamiento.riesgo_id,
+                tipo=EvaluacionRiesgo.Tipo.RESIDUAL,
+                activo=True,
+            )
+            .order_by('-fecha_evaluacion', '-creado_en')
+            .first()
+        )
+    if ev:
+        return ev.valor_riesgo, ev.nivel
+    return None, None
+
+
+# ── Gestión de Riesgos (7 pestañas) ───────────────────────────────────────────
+
+def exportar_gestion_riesgos_excel():
+    evaluaciones_inherentes = _evaluaciones_inherentes()
+    grid = _grid_evaluaciones(evaluaciones_inherentes)
+    evaluaciones = list(
+        EvaluacionRiesgo.objects
+        .filter(activo=True, riesgo__eliminado=False)
+        .select_related('riesgo')
+        .order_by('-fecha_evaluacion', 'riesgo__codigo')
+    )
+
+    wb = crear_workbook('Portada')
+    excel_portada(
+        wb.active,
+        'Gestión de Riesgos ISO/IEC 27005',
+        secciones=[
+            'Activos',
+            'Amenazas',
+            'Vulnerabilidades',
+            'Riesgos',
+            'Evaluación',
+            'Matriz de riesgos',
+            'Tratamiento',
+        ],
+        nota='Exportación completa del módulo de gestión de riesgos. '
+             'Fórmula: VALOR = PROBABILIDAD × IMPACTO.',
+    )
+
+    ws_act = wb.create_sheet('Activos')
+    fila = excel_encabezado_tabla(
+        ws_act, 1, 'Activos',
+        ['Código', 'Nombre', 'Clasificación', 'Criticidad', 'Descripción'],
+    )
+    for a in Activo.objects.filter(activo=True).order_by('codigo'):
+        excel_celda_datos(ws_act, fila, 1, a.codigo)
+        excel_celda_datos(ws_act, fila, 2, a.nombre)
+        excel_celda_datos(ws_act, fila, 3, a.get_clasificacion_display())
+        excel_celda_datos(ws_act, fila, 4, a.get_criticidad_display())
+        excel_celda_datos(ws_act, fila, 5, a.descripcion)
+        fila += 1
+    excel_ajustar_columnas(ws_act, max_width=50)
+
+    ws_amn = wb.create_sheet('Amenazas')
+    fila = excel_encabezado_tabla(ws_amn, 1, 'Amenazas', ['Código', 'Tipo', 'Nombre', 'Descripción'])
+    for am in Amenaza.objects.filter(activo=True).order_by('codigo'):
+        excel_celda_datos(ws_amn, fila, 1, am.codigo)
+        excel_celda_datos(ws_amn, fila, 2, am.get_tipo_display())
+        excel_celda_datos(ws_amn, fila, 3, am.nombre)
+        excel_celda_datos(ws_amn, fila, 4, am.descripcion)
+        fila += 1
+    excel_ajustar_columnas(ws_amn, max_width=50)
+
+    ws_vln = wb.create_sheet('Vulnerabilidades')
+    fila = excel_encabezado_tabla(
+        ws_vln, 1, 'Vulnerabilidades',
+        ['Código', 'Activo', 'Vulnerabilidad', 'Severidad', 'Estado'],
+    )
+    for v in Vulnerabilidad.objects.select_related('activo').exclude(estado='cerrada').order_by('codigo'):
+        excel_celda_datos(ws_vln, fila, 1, v.codigo)
+        excel_celda_datos(ws_vln, fila, 2, v.activo.nombre)
+        excel_celda_datos(ws_vln, fila, 3, v.nombre)
+        excel_celda_datos(ws_vln, fila, 4, v.get_severidad_display())
+        excel_celda_datos(ws_vln, fila, 5, v.get_estado_display())
+        fila += 1
+    excel_ajustar_columnas(ws_vln, max_width=50)
+
+    ws_rsg = wb.create_sheet('Riesgos')
+    fila = excel_encabezado_tabla(
+        ws_rsg, 1, 'Riesgos',
+        ['Código', 'Activo', 'Amenaza', 'Vulnerabilidad', 'Descripción'],
+    )
+    for r in Riesgo.objects.filter(eliminado=False).select_related('activo', 'amenaza', 'vulnerabilidad').order_by('codigo'):
+        excel_celda_datos(ws_rsg, fila, 1, r.codigo)
+        excel_celda_datos(ws_rsg, fila, 2, r.activo.nombre)
+        excel_celda_datos(ws_rsg, fila, 3, r.amenaza.nombre)
+        excel_celda_datos(ws_rsg, fila, 4, r.vulnerabilidad.codigo if r.vulnerabilidad else '—')
+        excel_celda_datos(ws_rsg, fila, 5, r.descripcion)
+        fila += 1
+    excel_ajustar_columnas(ws_rsg, max_width=60)
+
+    ws_eval = wb.create_sheet('Evaluacion')
+    fila = excel_encabezado_tabla(
+        ws_eval, 1, 'Evaluaciones de riesgo',
+        ['Riesgo', 'Tipo', 'Probabilidad', 'Impacto', 'Valor', 'Nivel', 'Fecha'],
+    )
+    for ev in evaluaciones:
+        nivel = ev.nivel
+        excel_celda_datos(ws_eval, fila, 1, ev.riesgo.codigo)
+        excel_celda_datos(ws_eval, fila, 2, ev.get_tipo_display())
+        excel_celda_datos(ws_eval, fila, 3, f'P{ev.probabilidad} — {PROB_LABELS[ev.probabilidad - 1]}')
+        excel_celda_datos(ws_eval, fila, 4, f'I{ev.impacto} — {IMP_LABELS[ev.impacto - 1]}')
+        excel_celda_datos(ws_eval, fila, 5, ev.valor_riesgo, align='center')
+        excel_celda_datos(ws_eval, fila, 6, NIVEL_TEXTO.get(nivel, ev.get_nivel_display()), nivel=nivel)
+        excel_celda_datos(ws_eval, fila, 7, ev.fecha_evaluacion.strftime('%d/%m/%Y'), align='center')
+        fila += 1
+    excel_ajustar_columnas(ws_eval)
+
+    ws_mat = wb.create_sheet('Matriz')
+    fila_mat = excel_mapa_calor(ws_mat, 1, grid)
+    fila_mat = excel_encabezado_tabla(
+        ws_mat, fila_mat,
+        'Ubicación de cada riesgo en la matriz (evaluaciones inherentes)',
+        ['Riesgo', 'Probabilidad', 'Impacto', 'Celda', 'Valor', 'Nivel'],
+    )
+    for ev in evaluaciones_inherentes:
+        nivel = ev.nivel
+        excel_celda_datos(ws_mat, fila_mat, 1, ev.riesgo.codigo)
+        excel_celda_datos(ws_mat, fila_mat, 2, f'P{ev.probabilidad} — {PROB_LABELS[ev.probabilidad - 1]}')
+        excel_celda_datos(ws_mat, fila_mat, 3, f'I{ev.impacto} — {IMP_LABELS[ev.impacto - 1]}')
+        excel_celda_datos(ws_mat, fila_mat, 4, f'I{ev.impacto} × P{ev.probabilidad}', align='center')
+        excel_celda_datos(ws_mat, fila_mat, 5, ev.valor_riesgo, align='center')
+        excel_celda_datos(ws_mat, fila_mat, 6, NIVEL_TEXTO.get(nivel, ev.get_nivel_display()), nivel=nivel)
+        fila_mat += 1
+    for col in 'ABCDEF':
+        ws_mat.column_dimensions[col].width = 16
+    excel_ajustar_columnas(ws_mat)
+
+    ws_trat = wb.create_sheet('Tratamiento')
+    fila = excel_encabezado_tabla(
+        ws_trat, 1, 'Tratamientos de riesgo',
+        ['Riesgo', 'Estrategia', 'Control aplicado', 'Fecha inicio', 'Riesgo residual', 'Nivel'],
+    )
+    tratamientos = list(
+        TratamientoRiesgo.objects
+        .filter(activo=True, riesgo__eliminado=False)
+        .select_related('riesgo', 'responsable', 'evaluacion_residual')
+        .order_by('-fecha_inicio', 'riesgo__codigo')
+    )
+    if not tratamientos:
+        ws_trat.merge_cells(start_row=fila, start_column=1, end_row=fila, end_column=6)
+        ws_trat.cell(row=fila, column=1, value='Sin tratamientos registrados.')
+        fila += 1
+    for t in tratamientos:
+        valor_residual, nivel_residual = _residual_tratamiento(t)
+        excel_celda_datos(ws_trat, fila, 1, t.riesgo.codigo)
+        excel_celda_datos(ws_trat, fila, 2, t.get_estrategia_display())
+        excel_celda_datos(ws_trat, fila, 3, t.control_aplicado)
+        excel_celda_datos(ws_trat, fila, 4, t.fecha_inicio.strftime('%d/%m/%Y'), align='center')
+        if valor_residual is not None:
+            excel_celda_datos(ws_trat, fila, 5, valor_residual, align='center', nivel=nivel_residual)
+            excel_celda_datos(
+                ws_trat, fila, 6,
+                NIVEL_TEXTO.get(nivel_residual, nivel_residual or ''),
+                nivel=nivel_residual,
+            )
+        else:
+            excel_celda_datos(ws_trat, fila, 5, '—', align='center')
+            excel_celda_datos(ws_trat, fila, 6, '—', align='center')
+        fila += 1
+    excel_ajustar_columnas(ws_trat, max_width=55)
+
+    return respuesta_excel(wb, 'gestion-riesgos')
 
 
 # ── Matriz de Riesgos ─────────────────────────────────────────────────────────
@@ -93,7 +281,7 @@ def exportar_matriz_riesgos_excel():
         ws3, 1, 'Catálogo de riesgos',
         ['Código', 'Activo', 'Amenaza', 'Descripción'],
     )
-    for r in Riesgo.objects.select_related('activo', 'amenaza').order_by('codigo'):
+    for r in Riesgo.objects.filter(eliminado=False).select_related('activo', 'amenaza').order_by('codigo'):
         excel_celda_datos(ws3, fila_r, 1, r.codigo)
         excel_celda_datos(ws3, fila_r, 2, r.activo.nombre)
         excel_celda_datos(ws3, fila_r, 3, r.amenaza.nombre)
@@ -380,6 +568,7 @@ def exportar_auditoria_excel():
 
 
 EXPORTADORES = {
+    'gestion-riesgos': {'excel': exportar_gestion_riesgos_excel},
     'matriz-riesgos': {'pdf': exportar_matriz_riesgos_pdf, 'excel': exportar_matriz_riesgos_excel},
     'inventario': {'excel': exportar_inventario_excel},
     'ambiental': {'pdf': exportar_ambiental_pdf, 'excel': exportar_ambiental_excel},

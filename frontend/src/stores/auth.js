@@ -41,7 +41,9 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     accessToken.value = null
     user.value = null
-    localStorage.clear()
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user')
   }
 
   function syncFromStorage() {

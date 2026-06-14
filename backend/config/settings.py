@@ -161,6 +161,14 @@ DECOLECTA_API_TIMEOUT = env_int('DECOLECTA_API_TIMEOUT', 15)
 # Órdenes de compra — serie y correlativo
 ORDEN_COMPRA_SERIE_DEFAULT = os.getenv('ORDEN_COMPRA_SERIE_DEFAULT', '2026')
 
+# MySMSGate — SMS al teléfono del usuario (Android gateway + SIM)
+MYSMSGATE_ENABLED = env_bool('MYSMSGATE_ENABLED', False)
+MYSMSGATE_API_KEY = os.getenv('MYSMSGATE_API_KEY', '')
+MYSMSGATE_API_URL = os.getenv('MYSMSGATE_API_URL', 'https://mysmsgate.net/api/v1/send')
+MYSMSGATE_DEVICE_ID = os.getenv('MYSMSGATE_DEVICE_ID', '')
+MYSMSGATE_TIMEOUT = env_int('MYSMSGATE_TIMEOUT', 15)
+MYSMSGATE_SMS_TODAS = env_bool('MYSMSGATE_SMS_TODAS', True)
+
 # Seguridad HTTP (activar en producción con HTTPS)
 SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', False)
 SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', False)

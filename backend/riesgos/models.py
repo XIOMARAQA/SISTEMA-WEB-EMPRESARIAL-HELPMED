@@ -162,6 +162,7 @@ class Riesgo(models.Model):
         Vulnerabilidad, on_delete=models.SET_NULL, null=True, blank=True, related_name='riesgos'
     )
     descripcion = models.TextField()
+    eliminado = models.BooleanField(default=False)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -215,6 +216,7 @@ class EvaluacionRiesgo(models.Model):
     evaluado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     fecha_evaluacion = models.DateField()
     observaciones = models.TextField(blank=True)
+    activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -257,6 +259,7 @@ class TratamientoRiesgo(models.Model):
         related_name='tratamientos',
     )
     observaciones = models.TextField(blank=True)
+    activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:

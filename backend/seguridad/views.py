@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from seguridad.models import Rol, Usuario
 from seguridad.permissions import EsAdminOSuperusuario
 from seguridad.serializers import (
+    PerfilUpdateSerializer,
     RolSerializer,
     UsuarioCreateSerializer,
     UsuarioGestionSerializer,
@@ -21,6 +22,16 @@ class PerfilView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        return Response(UsuarioSerializer(request.user).data)
+
+    def patch(self, request):
+        serializer = PerfilUpdateSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(UsuarioSerializer(request.user).data)
 
 
